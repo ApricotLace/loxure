@@ -1,1 +1,3 @@
-{}
+{:aliases
+ {:dev
+  {:jvm-opts ["-XX:-OmitStackTraceInFastThrow"]}}}
