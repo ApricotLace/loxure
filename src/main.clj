@@ -1,12 +1,9 @@
-(ns main)
-
-
-(defn scan-tokens [^String source])
+(ns main
+  (:require [scanner]))
 
 (defn run [^String source]
-  (let [tokens (scan-tokens source)]
-    (doseq [t tokens]
-      (println t))))
+  (let [tokens (scanner/scan-tokens source)]
+    (println tokens)))
 
 
 (defn run-file [file-path]
