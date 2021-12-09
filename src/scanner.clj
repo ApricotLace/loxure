@@ -28,8 +28,7 @@
 
 ;;TODO: Shitty imperative style code, reimplement using parser-combinators or fsm ?
 (defn advance [{:as ctx, :keys [current source]}]
-  (println current source)
-  [(.charAt source current) (update ctx :current inc)])
+  [(.charAt source current) (update ctx :current inc)]) ;;TODO Smells.
 
 
 (defn inc-lines [ctx]
@@ -79,11 +78,31 @@
   (assoc ctx :start current))
 
 
-(defn slurp-comment [ctx]
+(defn omit-comment [ctx]
   (loop [ctx' ctx]
     (if (and (not= (peek ctx') \newline) (not (is-at-end? ctx')))
       (recur (second (advance ctx')))
       ctx')))
+
+
+(defn trim-quotes [{:keys [source start current]}]
+  (subs source (inc start) (dec current)))
+
+
+(defn slurp-string-literal [ctx]
+  (let [partially-slurped-str-literal-ctx
+        (loop [ctx' ctx]
+          (if (and (not= (peek ctx') \") (not (is-at-end? ctx')))
+            (recur (cond-> ctx'
+                     (= (peek ctx') \newline)
+                     (inc-lines)
+                     :always ((comp second advance))))
+            ctx'))]
+    (if (is-at-end? partially-slurped-str-literal-ctx)
+      "Throw error :(" #_TODO
+      (let [_ (println partially-slurped-str-literal-ctx)
+            [_ ctx'] (advance partially-slurped-str-literal-ctx)]
+        (add-token ctx' :STRING (trim-quotes ctx'))))))
 
 
 (defn scan-tokens [source]
@@ -105,16 +124,19 @@
           \= (recur (add-token ctx (if (match ctx \=) :EQUAL_EQUAL :EQUAL)))
           \< (recur (add-token ctx (if (match ctx \=) :LESS_EQUAL :LESS)))
           \> (recur (add-token ctx (if (match ctx \=) :GREATER_EQUAL :GREATER)))
-          \/ (recur (if (match ctx \/) (slurp-comment ctx) (add-token ctx :SLASH)))
+          \/ (recur (if (match ctx \/) (omit-comment ctx) (add-token ctx :SLASH)))
           \space (recur ctx)
-          \newline (recur (inc-lines ctx))))
+          \newline (recur (inc-lines ctx))
+          \" (recur (slurp-string-literal ctx))))
       ctx')))
 
 
 (comment
 
   (scan-tokens "// this is a comment
-(( )){} // grouping stuff
+((\"Lemon\" \"Apple\")){} // grouping stuff
 !*+-/=<> <= == // operators")
+
+
 
   )
