@@ -2,37 +2,29 @@
   (:require [clojure.string :as str]))
 
 
-(def token-types
-  #{;; Single-character tokens.
-    :LEFT_PAREN :RIGHT_PAREN :LEFT_BRACE :RIGHT_BRACE
-    :COMMA :DOT :MINUS :PLUS :SEMICOLON :SLASH :STAR
+(defn print-error [& forms]
+  (binding [*out* *err*]
+    (apply println forms)))
 
-    ;; One or two character tokens.
-    :BANG :BANG_EQUAL
-    :EQUAL :EQUAL_EQUAL
-    :GREATER :GREATER_EQUAL
-    :LESS :LESS_EQUAL
 
-    ;; Literals.
-    ::IDENTIFIER :STRING :NUMBER
-
-    ;; Keywords.
-    :AND :CLASS :ELSE :FALSE :FUN :FOR :IF :NIL :OR
-    :PRINT :RETURN :SUPER :THIS :TRUE :VAR :WHILE
-
-    ;;End of file.
-    ::EOF})
+(defn report-error [{:as ctx, :keys [line]} where message]
+  (print-error (format "[Line: %s] Error %s: %s" line where message))
+  (assoc ctx :error {:where where :message message}))
 
 
 (defn is-at-end? [{:keys [current length]}]
   (>=  current length))
 
-;;TODO: Shitty imperative style code, reimplement using parser-combinators or fsm ?
+
 (defn advance
-  "Consume curr char from stream, inc curr pointer by 1
-  => pair of consumed char & updated ctx"
-  [{:as ctx, :keys [current source]}]
-  [(.charAt source current) (update ctx :current inc)]) ;;TODO Smells.
+  "Consume char at ctx:current position"
+  [{:keys [current source]}]
+  (.charAt source current))
+
+
+(defn inc-curr-ptr
+  [ctx]
+  (update ctx :current inc))
 
 
 (defn inc-lines [ctx]
@@ -65,13 +57,13 @@
 
 (defn peek [ctx]
   (if (is-at-end? ctx)
-    \0
+    \newline
     (curr-char ctx)))
 
 
 (defn peek-next [{:as ctx, :keys [current source length]}]
   (if (>= (inc current) length)
-    \0
+    \newline
     (.charAt source (inc current))))
 
 
@@ -91,7 +83,7 @@
 (defn omit-comment [ctx]
   (loop [ctx' ctx]
     (if (and (not= (peek ctx') \newline) (not (is-at-end? ctx')))
-      (recur (second (advance ctx')))
+      (recur (inc-curr-ptr ctx'))
       ctx')))
 
 
@@ -99,18 +91,17 @@
   (subs source (inc start) (dec current)))
 
 
-(defn slurp-string-literal [ctx]
+(defn slurp-string-literal [{:as ctx, :keys [current]}]
   (let [partially-slurped-str-literal-ctx
         (loop [ctx' ctx]
           (if (and (not= (peek ctx') \") (not (is-at-end? ctx')))
             (recur (cond-> ctx'
-                     (= (peek ctx') \newline)
-                     (inc-lines)
-                     :always ((comp second advance))))
+                     (= (peek ctx') \newline) (inc-lines)
+                     :always inc-curr-ptr))
             ctx'))]
     (if (is-at-end? partially-slurped-str-literal-ctx)
-      "Throw error :(" #_TODO
-      (let [[_ ctx'] (advance partially-slurped-str-literal-ctx)]
+      (report-error ctx "" (format "Unmatched quote at position %s" current))
+      (let [ctx' (inc-curr-ptr partially-slurped-str-literal-ctx)]
         (add-token ctx' :STRING (trim-quotes ctx'))))))
 
 
@@ -122,14 +113,14 @@
   (let [ctx'
         (loop [ctx' ctx]
           (if (is-digit? (peek ctx'))
-            (recur (second (advance ctx')))
+            (recur (inc-curr-ptr ctx'))
             ctx'))
 
         {:as ctx', :keys [start current source]}
         (if (and (= (peek ctx') \.) (is-digit? (peek-next ctx')))
-          (loop [ctx' (second (advance ctx'))]
+          (loop [ctx' (inc-curr-ptr ctx')]
             (if (is-digit? (peek ctx'))
-              (recur (second (advance ctx')))
+              (recur (inc-curr-ptr ctx'))
               ctx'))
           ctx')]
 
@@ -170,7 +161,7 @@
   (let [{:as ctx', :keys [source start current]}
         (loop [ctx' ctx]
           (if (is-alpha-num? (peek ctx'))
-            (recur (second (advance ctx')))
+            (recur (inc-curr-ptr ctx'))
             ctx'))
         text (subs source start current)
         token-type (if-let [tt (get keywords text)] tt :IDENTIFIER)]
@@ -179,49 +170,53 @@
 
 (defn scan-tokens [source]
   (loop [ctx' (init-scanner-ctx source)]
-    (if-not (is-at-end? ctx')
-      (let [[c ctx] ((comp advance set-start=current) ctx')]
-        (case c
-          \( (recur (add-token ctx :LEFT_PAREN))
-          \) (recur (add-token ctx :RIGHT_PAREN))
-          \{ (recur (add-token ctx :LEFT_BRACE))
-          \} (recur (add-token ctx :RIGHT_BRACE))
-          \, (recur (add-token ctx :COMMA))
-          \. (recur (add-token ctx :DOT))
-          \- (recur (add-token ctx :MINUS))
-          \+ (recur (add-token ctx :PLUS))
-          \; (recur (add-token ctx :SEMICOLON))
-          \* (recur (add-token ctx :STAR))
-          \! (recur (add-token (if-let [cctx (match ctx \=)]
-                                 cctx ctx) (if (match ctx \=) :BANG_EQUAL :BANG)))
-          \= (recur (add-token (if-let [cctx (match ctx \=)]
-                                 cctx ctx) (if (match ctx \=) :EQUAL_EQUAL :EQUAL))) ;;Uh oh, stinky
-          \< (recur (add-token (if-let [cctx (match ctx \=)]
-                                 cctx ctx) (if (match ctx \=) :LESS_EQUAL :LESS)))
-          \> (recur (add-token (if-let [cctx (match ctx \=)]
-                                 cctx ctx) (if (match ctx \=) :GREATER_EQUAL :GREATER)))
-          \/ (recur (if (match ctx \/) (omit-comment (second (advance ctx))) (add-token ctx :SLASH)))
-          \space (recur ctx)
-          \newline (recur (inc-lines ctx))
-          \" (recur (slurp-string-literal ctx))
-          (cond
-            (is-digit? c)
-            (recur (slurp-number-literal ctx))
+    (if-not (or (:error ctx') (is-at-end? ctx'))
+      (let [ctx (set-start=current ctx')
+            c (advance ctx)
+            ctx (inc-curr-ptr ctx)]
+        (recur
+         (case c
+           \( (add-token ctx :LEFT_PAREN)
+           \) (add-token ctx :RIGHT_PAREN)
+           \{ (add-token ctx :LEFT_BRACE)
+           \} (add-token ctx :RIGHT_BRACE)
+           \, (add-token ctx :COMMA)
+           \. (add-token ctx :DOT)
+           \- (add-token ctx :MINUS)
+           \+ (add-token ctx :PLUS)
+           \; (add-token ctx :SEMICOLON)
+           \* (add-token ctx :STAR)
+           \! (add-token (or (match ctx \=) ctx) (if (match ctx \=) :BANG_EQUAL :BANG))
+           \= (add-token (or (match ctx \=) ctx) (if (match ctx \=) :EQUAL_EQUAL :EQUAL))
+           \< (add-token (or (match ctx \=) ctx) (if (match ctx \=) :LESS_EQUAL :LESS))
+           \> (add-token (or (match ctx \=) ctx) (if (match ctx \=) :GREATER_EQUAL :GREATER))
+           \/ (if (match ctx \/) (omit-comment (inc-curr-ptr ctx)) (add-token ctx :SLASH))
+           \space ctx
+           \newline (inc-lines ctx)
+           \" (slurp-string-literal ctx)
+           (cond
+             (is-digit? c)
+             (slurp-number-literal ctx)
 
-            (is-alpha? c)
-            (recur (slurp-identifier ctx))
+             (is-alpha? c)
+             (slurp-identifier ctx)
 
-            :error
-            '>?)))
+             :else
+             (report-error ctx "" (format "Panic. Ilegal char %s" c))))))
       ctx')))
 
 
 (comment
 
+  (scan-tokens "\"!\" a")
+
+
   (scan-tokens "// this is a comment
-((\"Lemon\" \"Apple\")){} // grouping stuff
-!*+-/=<> <= == 5490 12.43 // operators
-print \"Hello, World!\"")
+  identifier b and c
+  ((\"Lemon\" \"Apple\")){} // grouping stuff
+  !*+-/=<> <= == 5490 12.43 // operators
+  print \"Hello, World!\"
+  b and c")
 
 
 

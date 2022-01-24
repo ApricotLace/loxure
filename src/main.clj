@@ -1,9 +1,10 @@
 (ns main
-  (:require [scanner]))
+  (:require [scanner]
+            [clojure.pprint]))
 
-(defn run [^String source]
+(defn run [source]
   (let [tokens (scanner/scan-tokens source)]
-    (println tokens)))
+    (clojure.pprint/pprint tokens)))
 
 
 (defn run-file [file-path]
@@ -13,6 +14,7 @@
 (defn run-prompt []
   (loop [_ nil]
     (print "> ")
+    (flush)
     (when-let [line (read-line)]
       (run line)
       (recur nil))))
