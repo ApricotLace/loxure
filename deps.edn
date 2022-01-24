@@ -1,3 +1,2 @@
-{:aliases
- {:dev
-  {:jvm-opts ["-XX:-OmitStackTraceInFastThrow"]}}}
+{:deps {healthsamurai/matcho            {:mvn/version "0.3.9"}}
+ :aliases {:dev {:jvm-opts ["-XX:-OmitStackTraceInFastThrow"]}}}
